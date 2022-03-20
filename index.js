@@ -29,6 +29,9 @@ let browserSocket;
 
 var connectionId = "";
 var entryListCars = [];
+var carUpdates = [];
+var carUpdatesCounter = 0;
+var carEntryCount = 0;
 var lastEntrylistRequest = 0;
 
 const acc = dgram.createSocket("udp4");
@@ -65,17 +68,17 @@ acc.on("message", (message) => {
       entryListCars = [];
 
       var cID = reader.ReadInt32();
-      var carEntryCount = reader.ReadUInt16();
+      carEntryCount = reader.ReadUInt16();
       for (let i = 0; i < carEntryCount; i++) {
         entryListCars.push({ carIndex: reader.ReadUInt16() });
       }
 
       //console.log(entryListCars);
-      io.emit("entryList", {
+      /*io.emit("entryList", {
         entryList: entryListCars,
         carEntryCount: carEntryCount,
       });
-
+*/
       break;
     }
     case constants.InboundMessageTypes.ENTRY_LIST_CAR: {
@@ -111,7 +114,14 @@ acc.on("message", (message) => {
       //console.log(entryListCars[index].carInfo.drivers);
 
       //Send Entry list cars to frontend
-      io.emit("carInfo", carInfo);
+      //io.emit("carInfo", carInfo);
+
+      //add to entryListCars
+      for (let i; i < entryListCars.length; i++) {
+        if (entryListCars[i].carIndex === carInfo.carIndex) {
+          entryListCars[i].carInfo = carInfo;
+        }
+      }
 
       break;
     }
@@ -183,7 +193,32 @@ acc.on("message", (message) => {
 
       //console.log(carUpdate);
       //Send carUpdate to frontend
-      io.emit("realTimeCarUpdate", carUpdate);
+      let indexCarList = entryListCars.findIndex((x) => x.carIndex === realTimeUpdate.carIndex);
+      let indexUpdateList = carUpdates.findIndex((x) => x.carIndex === realTimeUpdate.carIndex)
+      if (indexCarList === -1 && entryListCars.length > 0) {
+        entryListCars = [];
+        requestEntryList();
+      } else {
+        if (indexUpdateList === -1) {
+          carUpdatesCounter++;
+          carUpdates.push(carUpdate);
+          entryListCars[indexCarList].carUpdate = carUpdate;
+          io.emit("realTimeCarUpdate", entryListCars);
+          
+        } else {
+          carUpdates = [];
+          carUpdates.push(carUpdate);
+          carUpdatesCounter = 1;
+          entryListCars[indexCarList].carUpdate = carUpdate;
+          io.emit("realTimeCarUpdate", entryListCars);
+        }
+      }
+      if (carUpdatesCounter > carEntryCount) {
+        entryListCars = [];
+        carUpdates = [];
+        carUpdatesCounter = 0;
+        requestEntryList();
+      }
       break;
     }
     case constants.InboundMessageTypes.TRACK_DATA: {

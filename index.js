@@ -32,6 +32,7 @@ var entryListCars = [];
 var carUpdates = [];
 var carUpdatesCounter = 0;
 var carEntryCount = 0;
+var entryListCarCount = 0;
 var lastEntrylistRequest = 0;
 
 const acc = dgram.createSocket("udp4");
@@ -117,11 +118,12 @@ acc.on("message", (message) => {
       //io.emit("carInfo", carInfo);
 
       //add to entryListCars
-      for (let i; i < entryListCars.length; i++) {
-        if (entryListCars[i].carIndex === carInfo.carIndex) {
-          entryListCars[i].carInfo = carInfo;
+      entryListCars.map((x) => {
+        if (x.carIndex === carInfo.carIndex) {
+          x.carInfo = carInfo;
+          entryListCarCount++;
         }
-      }
+      })
 
       break;
     }
@@ -172,7 +174,7 @@ acc.on("message", (message) => {
 
       carUpdate.carIndex = reader.ReadUInt16();
       carUpdate.driverIndex = reader.ReadUInt16();
-      carUpdate.driverCount = reader.ReadBytes(1).readUint8(0);
+      carUpdate.driverCount = reader.ReadBytes(1).readUInt8(0);
       carUpdate.gear = reader.ReadBytes(1).readUInt8(0) - 1; //works R = -1, N = 0
       carUpdate.worldPosX = reader.ReadFloat();
       carUpdate.worldPosY = reader.ReadFloat();
@@ -193,32 +195,29 @@ acc.on("message", (message) => {
 
       //console.log(carUpdate);
       //Send carUpdate to frontend
-      let indexCarList = entryListCars.findIndex((x) => x.carIndex === realTimeUpdate.carIndex);
-      let indexUpdateList = carUpdates.findIndex((x) => x.carIndex === realTimeUpdate.carIndex)
+      let indexCarList = entryListCars.findIndex((x) => x.carIndex === carUpdate.carIndex);
+      let indexUpdateList = carUpdates.findIndex((x) => x.carIndex === carUpdate.carIndex);
       if (indexCarList === -1 && entryListCars.length > 0) {
         entryListCars = [];
         requestEntryList();
-      } else {
+      };
+
+      if (entryListCars.length > 0) {
+        entryListCars[indexCarList].carUpdate = carUpdate;
+        carUpdates.push(carUpdate);
         if (indexUpdateList === -1) {
           carUpdatesCounter++;
-          carUpdates.push(carUpdate);
-          entryListCars[indexCarList].carUpdate = carUpdate;
-          io.emit("realTimeCarUpdate", entryListCars);
-          
-        } else {
-          carUpdates = [];
-          carUpdates.push(carUpdate);
-          carUpdatesCounter = 1;
-          entryListCars[indexCarList].carUpdate = carUpdate;
-          io.emit("realTimeCarUpdate", entryListCars);
+          console.log(carUpdatesCounter)
         }
       }
-      if (carUpdatesCounter > carEntryCount) {
-        entryListCars = [];
-        carUpdates = [];
-        carUpdatesCounter = 0;
-        requestEntryList();
+      
+    
+      if (entryListCarCount === carEntryCount && carUpdatesCounter === carEntryCount && entryListCars.length > 0){
+        io.emit("realTimeCarUpdate", entryListCars);
       }
+
+      //Increment update counter until hit 30, send data every update
+      //Reset to 0, 
       break;
     }
     case constants.InboundMessageTypes.TRACK_DATA: {
@@ -234,12 +233,12 @@ acc.on("message", (message) => {
 
       trackData.CameraSets = {};
 
-      var cameraSetCount = reader.ReadBytes(1).readUint8(0);
+      var cameraSetCount = reader.ReadBytes(1).readUInt8(0);
       for (let camSet = 0; camSet < cameraSetCount; camSet++) {
         var camSetName = ReadString(reader);
         trackData.CameraSets[camSetName] = [];
 
-        var cameraCount = reader.ReadBytes(1).readUint8(0);
+        var cameraCount = reader.ReadBytes(1).readUInt8(0);
         for (let cam = 0; cam < cameraCount; cam++) {
           var cameraName = ReadString(reader);
           trackData.CameraSets[camSetName].push(cameraName);
@@ -247,7 +246,7 @@ acc.on("message", (message) => {
       }
 
       var hudPages = [];
-      var hudPagesCount = reader.ReadBytes(1).readUint8(0);
+      var hudPagesCount = reader.ReadBytes(1).readUInt8(0);
       for (let i = 0; i < hudPagesCount; i++) {
         hudPages.push(ReadString(reader));
       }
@@ -288,7 +287,7 @@ function readLap(reader) {
   lap.CarIndex = reader.ReadUInt16();
   lap.DriverIndex = reader.ReadUInt16();
 
-  let splitCount = reader.ReadBytes(1).readUint8(0);
+  let splitCount = reader.ReadBytes(1).readUInt8(0);
   let splits = [];
   for (let i = 0; i < splitCount; i++) {
     splits.push(reader.ReadInt32());
@@ -296,11 +295,11 @@ function readLap(reader) {
 
   lap.splits = splits;
 
-  lap.IsInvalid = reader.ReadBytes(1).readUint8(0) > 0;
-  lap.IsValidForBest = reader.ReadBytes(1).readUint8(0) > 0;
+  lap.IsInvalid = reader.ReadBytes(1).readUInt8(0) > 0;
+  lap.IsValidForBest = reader.ReadBytes(1).readUInt8(0) > 0;
 
-  var isOutlap = reader.ReadBytes(1).readUint8(0) > 0;
-  var isInlap = reader.ReadBytes(1).readUint8(0) > 0;
+  var isOutlap = reader.ReadBytes(1).readUInt8(0) > 0;
+  var isInlap = reader.ReadBytes(1).readUInt8(0) > 0;
 
   if (isOutlap) lap.Type = "Outlap";
   else if (isInlap) lap.Type = "Inlap";
@@ -369,6 +368,8 @@ function requestDisconnect() {
 
 //Make functions that returns stuff
 function requestEntryList() {
+  entryListCarCount = 0;
+  carUpdatesCounter = 0;
   entryListCars = [];
   let writer = new binutils.BinaryWriter("little");
 

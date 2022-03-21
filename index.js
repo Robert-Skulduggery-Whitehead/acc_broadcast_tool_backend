@@ -5,13 +5,12 @@ const io = require("socket.io")(http, {
   cors: {
     origin: "*",
   },
+  perMessageDeflate: false,
 });
 const api = require("./api");
 const constants = require("./constants");
 const binutils = require("binutils");
 const utf8 = require("utf8-bytes");
-const cors = require("cors");
-const { writer } = require("repl");
 
 const PORT = 9000;
 const LOCAL_PORT = 9001;
@@ -34,6 +33,9 @@ var carUpdatesCounter = 0;
 var carEntryCount = 0;
 var entryListCarCount = 0;
 var lastEntrylistRequest = 0;
+var cameraDefault;
+var cameraSetDefault;
+var focusedCarIndex;
 
 const acc = dgram.createSocket("udp4");
 acc.bind(LOCAL_PORT);
@@ -142,8 +144,11 @@ acc.on("message", (message) => {
       realTimeUpdate.SessionEndTime = msToTime(sessionEndTime);
 
       realTimeUpdate.FocusedCarIndex = reader.ReadInt32();
+      focusedCarIndex= realTimeUpdate.FocusedCarIndex
       realTimeUpdate.ActiveCameraSet = ReadString(reader);
+      cameraSetDefault = realTimeUpdate.ActiveCameraSet;
       realTimeUpdate.ActiveCamera = ReadString(reader);
+      cameraDefault = realTimeUpdate.ActiveCamera;
       realTimeUpdate.CurrentHudPage = ReadString(reader);
 
       realTimeUpdate.IsReplayPlaying = reader.ReadBytes(1).readUInt8(0) > 0;
@@ -188,6 +193,7 @@ acc.on("message", (message) => {
       carUpdate.laps = reader.ReadUInt16(); //works
 
       carUpdate.delta = reader.ReadUInt32(); //works (in ms??)
+      carUpdate.delta = carUpdate.delta / 1000;
       carUpdate.bestSessionLap = readLap(reader);
       carUpdate.lastLap = readLap(reader);
       carUpdate.currentLap = readLap(reader);
@@ -201,19 +207,20 @@ acc.on("message", (message) => {
         entryListCars = [];
         requestEntryList();
       };
-
+    
       if (entryListCars.length > 0) {
         entryListCars[indexCarList].carUpdate = carUpdate;
-        carUpdates.push(carUpdate);
         if (indexUpdateList === -1) {
+          carUpdates.push(carUpdate);
           carUpdatesCounter++;
-          console.log(carUpdatesCounter)
         }
       }
       
     
       if (entryListCarCount === carEntryCount && carUpdatesCounter === carEntryCount && entryListCars.length > 0){
         io.emit("realTimeCarUpdate", entryListCars);
+        carUpdatesCounter = 0;
+        carUpdates = [];
       }
 
       //Increment update counter until hit 30, send data every update
@@ -223,8 +230,8 @@ acc.on("message", (message) => {
     case constants.InboundMessageTypes.TRACK_DATA: {
       //works
       console.log("Track Update");
-      cID = reader.ReadInt32();
-      var trackData = {};
+      let cID = reader.ReadInt32();
+      let trackData = {};
 
       trackData.TrackName = ReadString(reader);
       trackData.TrackId = reader.ReadInt32();
@@ -325,7 +332,7 @@ function ReadString(reader) {
 }
 
 function WriteString(writer, string) {
-  var bytes = utf8(string);
+  var bytes = toUTF8Array(string);
   writer.WriteUInt16(bytes.Length);
   writer.WriteBytes(bytes);
 }
@@ -355,6 +362,7 @@ function requestDisconnect() {
   writer.WriteBytes([
     constants.outboundMessageTypes.UNREGISTER_COMMAND_APPLICATION,
   ]);
+  writer.WriteInt32(connectionId);
 
   acc.send(
     writer.ByteBuffer,
@@ -402,37 +410,36 @@ function requestTrackData() {
 
 //Setting focus
 function setFocus(carIndex) {
-  setFocusInternal(carIndex, null, null);
+  focusedCarIndex = carIndex;
+  setFocusInternal();
 }
 
-function setFocus(carIndex, cameraSet, camera) {
-  setFocusInternal(carIndex, cameraSet, camera);
+function setFocusCamera(carIndex, cameraSet, camera) {
+  focusedCarIndex = carIndex;
+  cameraSetDefault = cameraSet;
+  cameraDefault = camera;
+  setFocusInternal();
 }
 
 function setCamera(cameraSet, camera) {
-  setFocusInternal(null, cameraSet, camera);
+  cameraSet = cameraSet;
+  camera = camera;
+  setFocusInternal(null);
 }
 
-function setFocusInternal(carIndex, cameraSet, camera) {
+function setFocusInternal() {
   let writer = new binutils.BinaryWriter("little");
 
   writer.WriteBytes([constants.outboundMessageTypes.CHANGE_FOCUS]);
   writer.WriteInt32(connectionId);
 
-  if (carIndex === null) {
-    writer.WriteBytes(0);
-  } else {
-    writer.WriteBytes(1);
-    writer.WriteBytes(carIndex);
-  }
+  writer.WriteBytes(1);
+  writer.WriteUInt16(focusedCarIndex);
 
-  if (cameraSet === null || camera === null) {
-    writer.WriteBytes(0);
-  } else {
-    writer.WriteBytes(1);
-    WriteString(writer, cameraSet);
-    WriteString(writer, camera);
-  }
+  writer.WriteBytes(1);
+  WriteString(writer, cameraSetDefault);
+  WriteString(writer, cameraDefault);
+  
 
   requestFocusChange = writer.ByteBuffer;
 
@@ -544,4 +551,36 @@ function msToTime(s) {
   var hrs = (s - mins) / 60;
 
   return pad(hrs) + ":" + pad(mins) + ":" + pad(secs) + "." + pad(ms, 3);
+}
+
+
+function toUTF8Array(str) {
+  var utf8 = [];
+  for (var i=0; i < str.length; i++) {
+      var charcode = str.charCodeAt(i);
+      if (charcode < 0x80) utf8.push(charcode);
+      else if (charcode < 0x800) {
+          utf8.push(0xc0 | (charcode >> 6), 
+                    0x80 | (charcode & 0x3f));
+      }
+      else if (charcode < 0xd800 || charcode >= 0xe000) {
+          utf8.push(0xe0 | (charcode >> 12), 
+                    0x80 | ((charcode>>6) & 0x3f), 
+                    0x80 | (charcode & 0x3f));
+      }
+      // surrogate pair
+      else {
+          i++;
+          // UTF-16 encodes 0x10000-0x10FFFF by
+          // subtracting 0x10000 and splitting the
+          // 20 bits of 0x0-0xFFFFF into two halves
+          charcode = 0x10000 + (((charcode & 0x3ff)<<10)
+                    | (str.charCodeAt(i) & 0x3ff))
+          utf8.push(0xf0 | (charcode >>18), 
+                    0x80 | ((charcode>>12) & 0x3f), 
+                    0x80 | ((charcode>>6) & 0x3f), 
+                    0x80 | (charcode & 0x3f));
+      }
+  }
+  return utf8;
 }

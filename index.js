@@ -208,6 +208,7 @@ acc.on("message", (message) => {
         requestEntryList();
       };
     
+      //add previous car delta to cars?
       if (entryListCars.length > 0) {
         entryListCars[indexCarList].carUpdate = carUpdate;
         if (indexUpdateList === -1) {
@@ -218,6 +219,7 @@ acc.on("message", (message) => {
       
     
       if (entryListCarCount === carEntryCount && carUpdatesCounter === carEntryCount && entryListCars.length > 0){
+        entryListCars.sort((a, b) => a.carUpdate.position > b.carUpdate.position);
         io.emit("realTimeCarUpdate", entryListCars);
         carUpdatesCounter = 0;
         carUpdates = [];
@@ -433,12 +435,18 @@ function setFocusInternal() {
   writer.WriteBytes([constants.outboundMessageTypes.CHANGE_FOCUS]);
   writer.WriteInt32(connectionId);
 
-  writer.WriteBytes(1);
-  writer.WriteUInt16(focusedCarIndex);
+  console.log(focusedCarIndex);//test to see if index actually changes
+  console.log(cameraSetDefault);//same as above really
+  console.log(cameraDefault); //Changing camera but not racer??
 
-  writer.WriteBytes(1);
-  WriteString(writer, cameraSetDefault);
-  WriteString(writer, cameraDefault);
+  
+  writer.WriteBytes([1]);
+  writer.WriteUInt16(focusedCarIndex);
+  
+  writer.WriteBytes([0]);
+  //writer.WriteBytes(0);
+  //WriteString(writer, cameraSetDefault);
+  //WriteString(writer, cameraDefault);
   
 
   requestFocusChange = writer.ByteBuffer;
